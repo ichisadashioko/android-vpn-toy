@@ -3,7 +3,10 @@ package io.github.ichisadashioko.android.vpn.toy;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 
 import android.app.PendingIntent;
+import android.content.pm.PackageManager;
+import android.net.ProxyInfo;
 import android.net.VpnService;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.text.TextUtils;
 import android.util.Log;
@@ -50,10 +53,10 @@ public class ToyVpnConnection implements Runnable {
      *
      * <p>TODO: really don't do this; a blocking read on another thread is much cleaner.
      */
-    private static long IDLE_INTERVAL_MS = TimeUnit.SECONDS.toMillis(100);
+    private static final long IDLE_INTERVAL_MS = TimeUnit.SECONDS.toMillis(100);
 
     /**
-     * Number of periods of length {@IDLE_INTERVAL_MS} to wait before declaring the handshake a
+     * Number of periods of length {@code IDLE_INTERVAL_MS} to wait before declaring the handshake a
      * complete and abject failure.
      *
      * <p>TODO: use a higher-level protocol; hand-rolling is a fun but pointless exercise.
@@ -79,7 +82,7 @@ public class ToyVpnConnection implements Runnable {
     private final Set<String> mPackages;
 
     public ToyVpnConnection(
-            final VpnSerivce service,
+            final VpnService service,
             final int connectionId,
             final String serverName,
             final int serverPort,
@@ -224,7 +227,7 @@ public class ToyVpnConnection implements Runnable {
                 // avoid busy looping.
                 if (idle) {
                     Thread.sleep(IDLE_INTERVAL_MS);
-                    ;
+
                     final long timeNow = System.currentTimeMillis();
 
                     if ((lastSendTime + KEEPALIVE_INTERVAL_MS) <= timeNow) {
@@ -285,7 +288,7 @@ public class ToyVpnConnection implements Runnable {
         for (int i = 0; i < MAX_HANDSHAKE_ATTEMPTS; i++) {
             Thread.sleep(IDLE_INTERVAL_MS);
 
-            // Normally we should not receive random packets. Check that the frist byte is 0
+            // Normally we should not receive random packets. Check that the first byte is 0
             // as expected.
             int length = tunnel.read(packet);
             if ((length > 0) && (packet.get(0) == 0)) {
@@ -308,10 +311,65 @@ public class ToyVpnConnection implements Runnable {
                             builder.setMtu(Short.parseShort(fields[1]));
                             break;
                         }
+                    case 'a':
+                        {
+                            builder.addAddress(fields[1], Integer.parseInt(fields[2]));
+                            break;
+                        }
+                    case 'r':
+                        {
+                            builder.addRoute(fields[1], Integer.parseInt(fields[2]));
+                            break;
+                        }
+                    case 'd':
+                        {
+                            builder.addDnsServer(fields[1]);
+                            break;
+                        }
+                    case 's':
+                        {
+                            builder.addSearchDomain(fields[1]);
+                            break;
+                        }
                 }
             } catch (NumberFormatException e) {
                 throw new IllegalArgumentException("Bad parameter: " + parameter);
             }
         }
+
+        // Create a new interface using the builder and save the parameters.
+        final ParcelFileDescriptor vpnInterface;
+        for (String packageName : mPackages) {
+            try {
+                if (mAllow) {
+                    builder.addAllowedApplication(packageName);
+                } else {
+                    builder.addDisallowedApplication(packageName);
+                }
+            } catch (PackageManager.NameNotFoundException e) {
+                Log.w(getTag(), "Packet not available: " + packageName, e);
+            }
+        }
+
+        builder.setSession(mServerName).setConfigureIntent(mConfigureIntent);
+        if (!TextUtils.isEmpty(mProxyHostName)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setHttpProxy(ProxyInfo.buildDirectProxy(mProxyHostName, mProxyHostPort));
+            }
+        }
+
+        synchronized (mService) {
+            vpnInterface = builder.establish();
+            if (mOnEstablishListener != null) {
+                mOnEstablishListener.onEstablish(vpnInterface);
+            }
+        }
+
+        Log.i(getTag(), "new interface: " + vpnInterface + " (" + parameters + ")");
+        return vpnInterface;
+    }
+
+    public final String getTag() {
+        return ToyVpnConnection.class.getSimpleName() + "[" + mConnectionId + "]";
     }
 }
