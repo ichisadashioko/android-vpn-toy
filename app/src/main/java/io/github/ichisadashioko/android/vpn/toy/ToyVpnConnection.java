@@ -1,4 +1,4 @@
-package com.example.android.toyvpn;
+package io.github.ichisadashioko.android.vpn.toy;
 
 import static java.nio.charset.StandardCharsets.US_ASCII;
 
